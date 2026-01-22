@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GeoJSON Hole Cutter</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+    <script src='https://unpkg.com/@turf/turf@7.2.0/turf.min.js'></script>
     <script>
         tailwind.config = {
             theme: {
@@ -21,55 +26,418 @@
             },
         }
     </script>
-    <script src='https://unpkg.com/@turf/turf@7.2.0/turf.min.js'></script>
+    <style>
+        .map-container {
+            height: calc(100vh - 280px);
+            min-height: 400px;
+            border-radius: 0.5rem;
+            overflow: hidden;
+        }
+        .modal-map {
+            height: 400px;
+            border-radius: 0.5rem;
+            overflow: hidden;
+        }
+        .tab-button {
+            transition: all 0.3s;
+        }
+        .tab-button.active {
+            background-color: #008C99;
+            color: white;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+        .modal.show {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: auto;
+            padding: 0;
+            border-radius: 1rem;
+            width: 95%;
+            max-width: 1200px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+    </style>
 </head>
-<body class="bg-gray-50 min-h-screen flex items-center justify-center p-4">
+<body class="bg-gray-50 min-h-screen">
 
-    <div class="w-full max-w-xl bg-white shadow-2xl rounded-xl p-8 space-y-6">
+    <div class="max-w-7xl mx-auto p-4 space-y-4">
         
-        <h1 class="text-3xl font-bold text-gray-800 text-center">GeoJSON Hole Cutter</h1>
-        <p class="text-gray-600 text-center">Upload a GeoJSON FeatureCollection. The <strong>first feature</strong> is the main shape; all subsequent features will be cut out as holes.</p>
-
-        <div>
-            <label for="geojsonFileInput" class="block text-sm font-medium text-gray-700 mb-2">Select GeoJSON File (.geojson or .json)</label>
-            <input type="file" id="geojsonFileInput" accept=".geojson,application/json" class="w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 p-2.5 focus:outline-none focus:ring-2 focus:ring-primary-teal">
+        <!-- Compact Header -->
+        <div class="bg-white shadow-lg rounded-xl p-4">
+            <h1 class="text-2xl font-bold text-gray-800">GeoJSON Hole Cutter</h1>
+            <p class="text-sm text-gray-600 mt-1">Draw shapes on the map. The <strong>first shape</strong> is the main polygon; additional shapes become holes.</p>
         </div>
 
-        <button onclick="processGeoJSON()" id="processButton" class="w-full px-4 py-3 bg-primary-teal text-white font-semibold rounded-lg shadow-md hover:bg-primary-teal-dark transition duration-300 focus:outline-none focus:ring-4 focus:ring-primary-teal focus:ring-opacity-50 disabled:bg-primary-teal-light disabled:text-gray-600">
-            Process GeoJSON
-        </button>
-
-        <div id="status" class="p-3 text-sm rounded-lg bg-primary-teal-light text-primary-teal transition duration-300">
-            Awaiting file upload...
-        </div>
-
-        <div id="downloadArea" class="space-y-4 pt-4 border-t border-gray-200" style="display:none;">
-            <h2 class="text-xl font-semibold text-gray-700">Download Result</h2>
-            
-            <div>
-                <label for="outputFilenameInput" class="block text-sm font-medium text-gray-700 mb-2">Output Filename</label>
-                <input type="text" id="outputFilenameInput" class="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-primary-teal focus:border-primary-teal">
+        <!-- Tab Selector -->
+        <div class="bg-white shadow-lg rounded-xl p-4">
+            <div class="flex gap-3 mb-4">
+                <button onclick="switchTab('draw')" id="drawTab" class="tab-button active flex-1 px-4 py-2 font-semibold rounded-lg border-2 border-primary-teal text-sm">
+                    Draw on Map
+                </button>
+                <button onclick="switchTab('upload')" id="uploadTab" class="tab-button flex-1 px-4 py-2 font-semibold rounded-lg border-2 border-primary-teal text-sm">
+                    Upload File
+                </button>
             </div>
 
-            <button id="downloadButton" class="w-full px-4 py-3 bg-green-500 text-white font-semibold rounded-lg shadow-md hover:bg-green-600 transition duration-300 focus:outline-none focus:ring-4 focus:ring-green-500 focus:ring-opacity-50">
-                Download Processed File
-            </button>
+            <!-- Draw Mode -->
+            <div id="drawMode" class="space-y-4">
+                <div class="bg-white rounded-xl">
+                    <div id="drawMap" class="map-container"></div>
+                </div>
+
+                <div class="flex gap-3">
+                    <button onclick="undo()" id="undoButton" class="px-4 py-3 bg-gray-500 text-white font-semibold rounded-lg shadow-md hover:bg-gray-600 transition duration-300 disabled:bg-gray-300 disabled:cursor-not-allowed" disabled>
+                        ↶ Undo
+                    </button>
+                    <button onclick="redo()" id="redoButton" class="px-4 py-3 bg-gray-500 text-white font-semibold rounded-lg shadow-md hover:bg-gray-600 transition duration-300 disabled:bg-gray-300 disabled:cursor-not-allowed" disabled>
+                        ↷ Redo
+                    </button>
+                    <button onclick="processDrawnShapes()" id="processDrawnButton" class="flex-1 px-4 py-3 bg-primary-teal text-white font-semibold rounded-lg shadow-md hover:bg-primary-teal-dark transition duration-300 focus:outline-none focus:ring-4 focus:ring-primary-teal focus:ring-opacity-50">
+                        Process Shapes
+                    </button>
+                    <button onclick="clearDrawnShapes()" class="px-4 py-3 bg-red-500 text-white font-semibold rounded-lg shadow-md hover:bg-red-600 transition duration-300 focus:outline-none focus:ring-4 focus:ring-red-500 focus:ring-opacity-50">
+                        Clear All
+                    </button>
+                </div>
+
+                <div id="statusDraw" class="p-3 text-sm rounded-lg bg-primary-teal-light text-primary-teal transition duration-300">
+                    Draw shapes on the map using the polygon tool (□)
+                </div>
+            </div>
+
+            <!-- Upload Mode -->
+            <div id="uploadMode" class="space-y-4" style="display:none;">
+                <div>
+                    <label for="geojsonFileInput" class="block text-sm font-medium text-gray-700 mb-2">Select GeoJSON File (.geojson or .json)</label>
+                    <input type="file" id="geojsonFileInput" accept=".geojson,application/json" class="w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 p-2.5 focus:outline-none focus:ring-2 focus:ring-primary-teal">
+                </div>
+
+                <button onclick="processGeoJSON()" id="processButton" class="w-full px-4 py-3 bg-primary-teal text-white font-semibold rounded-lg shadow-md hover:bg-primary-teal-dark transition duration-300 focus:outline-none focus:ring-4 focus:ring-primary-teal focus:ring-opacity-50 disabled:bg-primary-teal-light disabled:text-gray-600">
+                    Process GeoJSON
+                </button>
+
+                <div id="statusUpload" class="p-3 text-sm rounded-lg bg-primary-teal-light text-primary-teal transition duration-300">
+                    Awaiting file upload...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div id="resultModal" class="modal">
+        <div class="modal-content">
+            <div class="bg-white rounded-xl p-6 space-y-6">
+                <div class="flex justify-between items-center">
+                    <h2 class="text-2xl font-bold text-gray-800">Processing Results</h2>
+                    <button onclick="closeModal()" class="text-gray-500 hover:text-gray-700 text-3xl font-bold leading-none">
+                        &times;
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-700 mb-3">Original GeoJSON</h3>
+                        <div id="originalMap" class="modal-map"></div>
+                    </div>
+                    <div>
+                        <h3 class="text-lg font-semibold text-gray-700 mb-3">Result (with holes cut)</h3>
+                        <div id="resultMap" class="modal-map"></div>
+                    </div>
+                </div>
+
+                <div class="border-t border-gray-200 pt-6 space-y-4">
+                    <div>
+                        <label for="outputFilenameInput" class="block text-sm font-medium text-gray-700 mb-2">Output Filename</label>
+                        <input type="text" id="outputFilenameInput" class="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-primary-teal focus:border-primary-teal">
+                    </div>
+
+                    <div class="flex gap-3">
+                        <button id="downloadButton" class="flex-1 px-4 py-3 bg-green-500 text-white font-semibold rounded-lg shadow-md hover:bg-green-600 transition duration-300 focus:outline-none focus:ring-4 focus:ring-green-500 focus:ring-opacity-50">
+                            Download GeoJSON
+                        </button>
+                        <button onclick="closeModal()" class="px-6 py-3 bg-gray-500 text-white font-semibold rounded-lg shadow-md hover:bg-gray-600 transition duration-300">
+                            Close
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
     <script>
         let finalGeoJSONResult = null;
+        let originalGeoJSON = null;
+        let originalMap = null;
+        let resultMap = null;
+        let drawMap = null;
+        let drawnItems = null;
+        let currentMode = 'draw';
+        let undoStack = [];
+        let redoStack = [];
+        let isRestoring = false;
+        
         const fileInput = document.getElementById('geojsonFileInput');
-        const statusDiv = document.getElementById('status');
-        const downloadArea = document.getElementById('downloadArea');
         const downloadButton = document.getElementById('downloadButton');
         const filenameInput = document.getElementById('outputFilenameInput');
         const processButton = document.getElementById('processButton');
+        const resultModal = document.getElementById('resultModal');
         const DEFAULT_OUTPUT_NAME = 'map-cutout-result.geojson';
 
-        function setStatus(message, type = 'info') {
+        function switchTab(mode) {
+            currentMode = mode;
+            const uploadTab = document.getElementById('uploadTab');
+            const drawTab = document.getElementById('drawTab');
+            const uploadMode = document.getElementById('uploadMode');
+            const drawMode = document.getElementById('drawMode');
+            const statusUpload = document.getElementById('statusUpload');
+            const statusDraw = document.getElementById('statusDraw');
+
+            if (mode === 'upload') {
+                uploadTab.classList.add('active');
+                drawTab.classList.remove('active');
+                uploadMode.style.display = 'block';
+                drawMode.style.display = 'none';
+                statusUpload.textContent = 'Awaiting file upload...';
+                statusUpload.className = 'p-3 text-sm rounded-lg bg-primary-teal-light text-primary-teal transition duration-300';
+            } else {
+                drawTab.classList.add('active');
+                uploadTab.classList.remove('active');
+                uploadMode.style.display = 'none';
+                drawMode.style.display = 'block';
+                statusDraw.textContent = 'Draw shapes on the map using the polygon tool (□)';
+                statusDraw.className = 'p-3 text-sm rounded-lg bg-primary-teal-light text-primary-teal transition duration-300';
+                initializeDrawMap();
+            }
+        }
+
+        function initializeDrawMap() {
+            if (drawMap) return;
+
+            drawMap = L.map('drawMap').setView([20, 0], 2);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(drawMap);
+
+            drawnItems = new L.FeatureGroup();
+            drawMap.addLayer(drawnItems);
+
+            const drawControl = new L.Control.Draw({
+                draw: {
+                    polygon: {
+                        allowIntersection: false,
+                        showArea: true
+                    },
+                    polyline: false,
+                    rectangle: true,
+                    circle: false,
+                    marker: false,
+                    circlemarker: false
+                },
+                edit: {
+                    featureGroup: drawnItems,
+                    remove: true
+                }
+            });
+            drawMap.addControl(drawControl);
+
+            // Save initial empty state
+            saveState();
+
+            drawMap.on(L.Draw.Event.CREATED, function (e) {
+                const layer = e.layer;
+                const shapeCount = Object.keys(drawnItems._layers).length;
+                
+                if (shapeCount === 0) {
+                    layer.setStyle({ color: '#008C99', fillColor: '#008C99', fillOpacity: 0.4 });
+                    layer.bindPopup('<strong>Main Shape</strong>');
+                } else {
+                    layer.setStyle({ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.4 });
+                    layer.bindPopup(`<strong>Hole ${shapeCount}</strong>`);
+                }
+                
+                drawnItems.addLayer(layer);
+                saveState();
+                setStatus('draw', `${shapeCount + 1} shape(s) drawn`, 'info');
+            });
+
+            drawMap.on(L.Draw.Event.EDITED, function (e) {
+                saveState();
+                const shapeCount = Object.keys(drawnItems._layers).length;
+                setStatus('draw', `${shapeCount} shape(s) edited`, 'info');
+            });
+
+            drawMap.on(L.Draw.Event.DELETED, function (e) {
+                saveState();
+                const shapeCount = Object.keys(drawnItems._layers).length;
+                setStatus('draw', `Shape(s) deleted. ${shapeCount} remaining`, 'info');
+            });
+
+            // Cancel any active editing before undo/redo
+            drawMap.on('draw:editstart draw:deletestart', function() {
+                // Active editing mode started
+            });
+        }
+
+        function getCurrentState() {
+            const state = [];
+            drawnItems.eachLayer(layer => {
+                state.push({
+                    geoJSON: layer.toGeoJSON()
+                });
+            });
+            return JSON.stringify(state);
+        }
+
+        function saveState() {
+            if (isRestoring) return; // Don't save while restoring
+            
+            const state = getCurrentState();
+            
+            // Don't save duplicate states
+            if (undoStack.length > 0 && undoStack[undoStack.length - 1] === state) {
+                return;
+            }
+            
+            undoStack.push(state);
+            redoStack = []; // Clear redo stack when new action is performed
+            
+            // Limit stack size to prevent memory issues
+            if (undoStack.length > 50) {
+                undoStack.shift();
+            }
+            
+            updateUndoRedoButtons();
+        }
+
+        function updateUndoRedoButtons() {
+            document.getElementById('undoButton').disabled = undoStack.length <= 1;
+            document.getElementById('redoButton').disabled = redoStack.length === 0;
+        }
+
+        function cancelActiveEdits() {
+            // Cancel any active draw/edit operations
+            if (drawMap._editTooltip) {
+                drawMap._editTooltip.dispose();
+            }
+            
+            // Remove any active handlers
+            Object.keys(drawMap._handlers || {}).forEach(key => {
+                const handler = drawMap._handlers[key];
+                if (handler && handler.disable) {
+                    handler.disable();
+                }
+            });
+        }
+
+        function undo() {
+            if (undoStack.length <= 1) return;
+            
+            cancelActiveEdits();
+            
+            // Save current state to redo stack
+            const currentState = undoStack.pop();
+            redoStack.push(currentState);
+            
+            // Restore previous state
+            const previousState = undoStack[undoStack.length - 1];
+            restoreState(previousState);
+            updateUndoRedoButtons();
+            
+            const shapeCount = Object.keys(drawnItems._layers).length;
+            setStatus('draw', `Undo performed. ${shapeCount} shape(s) on map`, 'info');
+        }
+
+        function redo() {
+            if (redoStack.length === 0) return;
+            
+            cancelActiveEdits();
+            
+            const nextState = redoStack.pop();
+            undoStack.push(nextState);
+            
+            restoreState(nextState);
+            updateUndoRedoButtons();
+            
+            const shapeCount = Object.keys(drawnItems._layers).length;
+            setStatus('draw', `Redo performed. ${shapeCount} shape(s) on map`, 'info');
+        }
+
+        function restoreState(stateJSON) {
+            isRestoring = true;
+            
+            drawnItems.clearLayers();
+            const state = JSON.parse(stateJSON);
+            
+            state.forEach((item, index) => {
+                const layer = L.geoJSON(item.geoJSON).getLayers()[0];
+                
+                if (index === 0) {
+                    layer.setStyle({ color: '#008C99', fillColor: '#008C99', fillOpacity: 0.4 });
+                    layer.bindPopup('<strong>Main Shape</strong>');
+                } else {
+                    layer.setStyle({ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.4 });
+                    layer.bindPopup(`<strong>Hole ${index}</strong>`);
+                }
+                
+                drawnItems.addLayer(layer);
+            });
+            
+            isRestoring = false;
+        }
+
+        function clearDrawnShapes() {
+            if (drawnItems) {
+                cancelActiveEdits();
+                drawnItems.clearLayers();
+                saveState();
+                setStatus('draw', 'All shapes cleared', 'info');
+            }
+        }
+
+        function processDrawnShapes() {
+            const layers = Object.values(drawnItems._layers);
+            
+            if (layers.length === 0) {
+                setStatus('draw', 'Please draw at least one shape first', 'error');
+                return;
+            }
+
+            const features = layers.map(layer => {
+                return {
+                    type: 'Feature',
+                    properties: {},
+                    geometry: layer.toGeoJSON().geometry
+                };
+            });
+
+            const geojson = {
+                type: 'FeatureCollection',
+                features: features
+            };
+
+            originalGeoJSON = geojson;
+            processGeoJSONData(geojson);
+        }
+
+        function setStatus(mode, message, type = 'info') {
+            const statusDiv = mode === 'draw' ? document.getElementById('statusDraw') : document.getElementById('statusUpload');
             statusDiv.textContent = message;
-            downloadArea.style.display = 'none';
             processButton.disabled = false;
             
             statusDiv.className = 'p-3 text-sm rounded-lg transition duration-300';
@@ -80,6 +448,63 @@
             } else {
                 statusDiv.classList.add('bg-primary-teal-light', 'text-primary-teal');
             }
+        }
+
+        function initializeMaps() {
+            if (originalMap) {
+                originalMap.remove();
+            }
+            if (resultMap) {
+                resultMap.remove();
+            }
+
+            originalMap = L.map('originalMap').setView([0, 0], 2);
+            resultMap = L.map('resultMap').setView([0, 0], 2);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(originalMap);
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(resultMap);
+        }
+
+        function displayOriginalGeoJSON(geojson) {
+            const geoJsonLayer = L.geoJSON(geojson, {
+                style: function(feature) {
+                    const isMainShape = geojson.features.indexOf(feature) === 0;
+                    return {
+                        color: isMainShape ? '#008C99' : '#ef4444',
+                        weight: 2,
+                        fillOpacity: 0.4,
+                        fillColor: isMainShape ? '#008C99' : '#ef4444'
+                    };
+                },
+                onEachFeature: function(feature, layer) {
+                    const isMainShape = geojson.features.indexOf(feature) === 0;
+                    const label = isMainShape ? 'Main Shape' : 'Hole';
+                    layer.bindPopup(`<strong>${label}</strong>`);
+                }
+            }).addTo(originalMap);
+
+            originalMap.fitBounds(geoJsonLayer.getBounds());
+        }
+
+        function displayResultGeoJSON(geojson) {
+            const geoJsonLayer = L.geoJSON(geojson, {
+                style: {
+                    color: '#10b981',
+                    weight: 2,
+                    fillOpacity: 0.4,
+                    fillColor: '#10b981'
+                },
+                onEachFeature: function(feature, layer) {
+                    layer.bindPopup('<strong>Result with Holes Cut</strong>');
+                }
+            }).addTo(resultMap);
+
+            resultMap.fitBounds(geoJsonLayer.getBounds());
         }
 
         function performDifference(geojson) {
@@ -103,49 +528,66 @@
             return mainPolygon;
         }
 
+        function openModal() {
+            resultModal.classList.add('show');
+            setTimeout(() => {
+                initializeMaps();
+                displayOriginalGeoJSON(originalGeoJSON);
+                displayResultGeoJSON(finalGeoJSONResult);
+            }, 100);
+        }
+
+        function closeModal() {
+            resultModal.classList.remove('show');
+        }
+
+        function processGeoJSONData(geojson) {
+            try {
+                if (geojson.type !== 'FeatureCollection' || !geojson.features || geojson.features.length < 1) {
+                    throw new Error("Invalid GeoJSON format. Expecting a FeatureCollection with at least one feature.");
+                }
+
+                const result = performDifference(geojson);
+                
+                if (result) {
+                    const initialProperties = geojson.features[0].properties || {};
+                    const finalFeature = turf.feature(result.geometry, initialProperties);
+                    finalGeoJSONResult = turf.featureCollection([finalFeature]);
+                    
+                    setStatus(currentMode, 'Successfully processed! Opening results...', 'success');
+                    openModal();
+                } else {
+                    throw new Error("Processing resulted in an empty or invalid geometry.");
+                }
+
+            } catch (e) {
+                setStatus(currentMode, 'Error during processing: ' + e.message, 'error');
+            }
+        }
+
         function processGeoJSON() {
             processButton.disabled = true;
-            setStatus('Processing file, please wait...', 'info');
+            setStatus('upload', 'Processing file, please wait...', 'info');
             finalGeoJSONResult = null;
             
             const file = fileInput.files[0];
 
             if (!file) {
-                setStatus('Please select a GeoJSON file first.', 'error');
+                setStatus('upload', 'Please select a GeoJSON file first.', 'error');
                 return;
             }
 
             const reader = new FileReader();
 
             reader.onload = function(event) {
-                try {
-                    const rawData = event.target.result;
-                    const geojson = JSON.parse(rawData);
-
-                    if (geojson.type !== 'FeatureCollection' || !geojson.features || geojson.features.length < 1) {
-                        throw new Error("Invalid GeoJSON format. Expecting a FeatureCollection with at least one feature.");
-                    }
-
-                    const result = performDifference(geojson);
-                    
-                    if (result) {
-                        const initialProperties = geojson.features[0].properties || {};
-                        const finalFeature = turf.feature(result.geometry, initialProperties);
-                        finalGeoJSONResult = turf.featureCollection([finalFeature]);
-                        
-                        setStatus('Successfully processed! Ready to download.', 'success');
-                        downloadArea.style.display = 'block';
-                    } else {
-                        throw new Error("Processing resulted in an empty or invalid geometry.");
-                    }
-
-                } catch (e) {
-                    setStatus('Error during processing: ' + e.message, 'error');
-                }
+                const rawData = event.target.result;
+                const geojson = JSON.parse(rawData);
+                originalGeoJSON = geojson;
+                processGeoJSONData(geojson);
             };
 
             reader.onerror = function(event) {
-                setStatus('Error reading file: ' + reader.error.name, 'error');
+                setStatus('upload', 'Error reading file: ' + reader.error.name, 'error');
             };
 
             reader.readAsText(file);
@@ -153,7 +595,7 @@
 
         downloadButton.addEventListener('click', () => {
             if (!finalGeoJSONResult) {
-                setStatus('No processed data to download.', 'error');
+                alert('No processed data to download.');
                 return;
             }
 
@@ -164,7 +606,6 @@
             a.href = url;
             
             let filename = filenameInput.value.trim();
-            // Ensure filename has a .geojson extension
             if (!filename || (!filename.toLowerCase().endsWith('.geojson') && !filename.toLowerCase().endsWith('.json'))) {
                 filename = (filename.split('.')[0] || DEFAULT_OUTPUT_NAME.split('.')[0]) + '.geojson';
             }
@@ -176,18 +617,16 @@
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
             
-            setStatus(`Download initiated for: ${filename}`, 'success');
+            alert(`Download initiated for: ${filename}`);
         });
 
         fileInput.addEventListener('change', () => {
             if (fileInput.files.length > 0) {
                 const fileName = fileInput.files[0].name;
                 
-                // Set the default output filename to the input filename, ensuring it ends with .geojson
                 let outputName = fileName;
                 if (!outputName.toLowerCase().endsWith('.geojson')) {
                     const parts = outputName.split('.');
-                    // If it has an extension, replace it. Otherwise, just append .geojson
                     if (parts.length > 1) {
                         parts.pop(); 
                     }
@@ -195,16 +634,23 @@
                 }
                 
                 filenameInput.value = outputName;
-                setStatus(`File selected: ${fileName}`, 'info');
+                setStatus('upload', `File selected: ${fileName}`, 'info');
             } else {
-                filenameInput.value = DEFAULT_OUTPUT_NAME; // Reset if file selection is cleared
-                setStatus('Awaiting file upload...', 'info');
+                filenameInput.value = DEFAULT_OUTPUT_NAME;
+                setStatus('upload', 'Awaiting file upload...', 'info');
             }
         });
         
-        // Initialize the output filename input on load
+        // Initialize on page load
         filenameInput.value = DEFAULT_OUTPUT_NAME;
+        initializeDrawMap();
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            if (event.target == resultModal) {
+                closeModal();
+            }
+        }
     </script>
 </body>
-
 </html>
