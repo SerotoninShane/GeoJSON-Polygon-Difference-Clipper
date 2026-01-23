@@ -80,7 +80,7 @@
         <!-- Compact Header -->
         <div class="bg-white shadow-lg rounded-xl p-4">
             <h1 class="text-2xl font-bold text-gray-800">GeoJSON Hole Cutter</h1>
-            <p class="text-sm text-gray-600 mt-1">Draw shapes on the map. The <strong>first shape</strong> is the main polygon; additional shapes become holes.</p>
+            <p class="text-sm text-gray-600 mt-1">Draw shapes on the map. Upload an eraser overlay to automatically exclude areas from your drawn shapes.</p>
         </div>
 
         <!-- Tab Selector -->
@@ -96,6 +96,31 @@
 
             <!-- Draw Mode -->
             <div id="drawMode" class="space-y-4">
+                <!-- Eraser Overlay Section -->
+                <div class="bg-gradient-to-r from-red-50 to-orange-50 border-2 border-red-200 rounded-xl p-4">
+                    <div class="flex items-center gap-2 mb-3">
+                        <svg class="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                        </svg>
+                        <h3 class="text-lg font-semibold text-red-800">Eraser Overlay (Master Exclusion Zone)</h3>
+                    </div>
+                    <p class="text-sm text-red-700 mb-3">Upload a GeoJSON file of areas to exclude. These will automatically cut holes in any shapes you draw.</p>
+                    
+                    <div class="flex gap-3 items-end">
+                        <div class="flex-1">
+                            <label for="eraserOverlayInput" class="block text-sm font-medium text-red-700 mb-2">Eraser Overlay File (.geojson or .json)</label>
+                            <input type="file" id="eraserOverlayInput" accept=".geojson,application/json" class="w-full text-sm text-gray-900 border border-red-300 rounded-lg cursor-pointer bg-white p-2.5 focus:outline-none focus:ring-2 focus:ring-red-500">
+                        </div>
+                        <button onclick="clearEraserOverlay()" id="clearOverlayButton" class="px-4 py-2.5 bg-red-500 text-white font-semibold rounded-lg shadow-md hover:bg-red-600 transition duration-300 disabled:bg-red-300 disabled:cursor-not-allowed" disabled>
+                            Clear Overlay
+                        </button>
+                    </div>
+                    
+                    <div id="overlayStatus" class="mt-3 p-2 text-sm rounded-lg bg-white text-red-600 hidden">
+                        No overlay loaded
+                    </div>
+                </div>
+
                 <div class="bg-white rounded-xl">
                     <div id="drawMap" class="map-container"></div>
                 </div>
@@ -111,7 +136,7 @@
                         Process Shapes
                     </button>
                     <button onclick="clearDrawnShapes()" class="px-4 py-3 bg-red-500 text-white font-semibold rounded-lg shadow-md hover:bg-red-600 transition duration-300 focus:outline-none focus:ring-4 focus:ring-red-500 focus:ring-opacity-50">
-                        Clear All
+                        Clear Drawn Shapes
                     </button>
                 </div>
 
@@ -190,6 +215,8 @@
         let undoStack = [];
         let redoStack = [];
         let isRestoring = false;
+        let eraserOverlayData = null;
+        let eraserOverlayLayer = null;
         
         const fileInput = document.getElementById('geojsonFileInput');
         const downloadButton = document.getElementById('downloadButton');
@@ -336,10 +363,11 @@
                 drawMap._editTooltip.dispose();
             }
             
-            // Remove any active handlers
+            // Only disable draw/edit handlers, not map interaction handlers
             Object.keys(drawMap._handlers || {}).forEach(key => {
                 const handler = drawMap._handlers[key];
-                if (handler && handler.disable) {
+                // Only disable draw and edit handlers, not zoom/drag handlers
+                if (handler && handler.disable && (key.includes('draw') || key.includes('edit'))) {
                     handler.disable();
                 }
             });
@@ -406,7 +434,62 @@
                 cancelActiveEdits();
                 drawnItems.clearLayers();
                 saveState();
-                setStatus('draw', 'All shapes cleared', 'info');
+                setStatus('draw', 'All drawn shapes cleared', 'info');
+            }
+        }
+
+        function clearEraserOverlay() {
+            eraserOverlayData = null;
+            if (eraserOverlayLayer) {
+                drawMap.removeLayer(eraserOverlayLayer);
+                eraserOverlayLayer = null;
+            }
+            document.getElementById('eraserOverlayInput').value = '';
+            document.getElementById('clearOverlayButton').disabled = true;
+            document.getElementById('overlayStatus').classList.add('hidden');
+            setStatus('draw', 'Eraser overlay cleared', 'info');
+        }
+
+        function loadEraserOverlay(geojson) {
+            try {
+                // Clear existing overlay
+                if (eraserOverlayLayer) {
+                    drawMap.removeLayer(eraserOverlayLayer);
+                }
+
+                // Store the overlay data
+                eraserOverlayData = geojson;
+
+                // Display overlay on map in semi-transparent red
+                eraserOverlayLayer = L.geoJSON(geojson, {
+                    style: {
+                        color: '#dc2626',
+                        weight: 2,
+                        fillOpacity: 0.3,
+                        fillColor: '#ef4444',
+                        dashArray: '5, 5'
+                    },
+                    onEachFeature: function(feature, layer) {
+                        layer.bindPopup('<strong>Eraser Overlay</strong><br>Areas matching this will be cut from drawn shapes');
+                    }
+                }).addTo(drawMap);
+
+                // Fit map to show overlay
+                drawMap.fitBounds(eraserOverlayLayer.getBounds());
+
+                // Update UI
+                document.getElementById('clearOverlayButton').disabled = false;
+                const featureCount = geojson.features ? geojson.features.length : 1;
+                document.getElementById('overlayStatus').textContent = `✓ Overlay loaded with ${featureCount} exclusion zone(s)`;
+                document.getElementById('overlayStatus').classList.remove('hidden');
+                document.getElementById('overlayStatus').classList.add('bg-green-100', 'text-green-800');
+                document.getElementById('overlayStatus').classList.remove('bg-white', 'text-red-600');
+
+                setStatus('draw', `Eraser overlay loaded successfully. Draw shapes to see them cut by the overlay.`, 'success');
+
+            } catch (e) {
+                setStatus('draw', 'Error loading eraser overlay: ' + e.message, 'error');
+                clearEraserOverlay();
             }
         }
 
@@ -426,10 +509,43 @@
                 };
             });
 
-            const geojson = {
+            let geojson = {
                 type: 'FeatureCollection',
                 features: features
             };
+
+            // If eraser overlay is loaded, apply it to the drawn shapes
+            if (eraserOverlayData) {
+                try {
+                    // Combine all drawn shapes into one
+                    let combinedDrawn = features[0];
+                    for (let i = 1; i < features.length; i++) {
+                        const unionResult = turf.union(turf.featureCollection([combinedDrawn, features[i]]));
+                        if (unionResult) combinedDrawn = unionResult;
+                    }
+
+                    // Get all eraser overlay features
+                    const eraserFeatures = eraserOverlayData.features || [eraserOverlayData];
+                    
+                    // Subtract each eraser feature from the combined drawn shape
+                    let result = combinedDrawn;
+                    for (const eraserFeature of eraserFeatures) {
+                        const diff = turf.difference(turf.featureCollection([result, eraserFeature]));
+                        if (diff) result = diff;
+                    }
+
+                    // Create final result with eraser applied
+                    geojson = {
+                        type: 'FeatureCollection',
+                        features: [result]
+                    };
+
+                    setStatus('draw', 'Shapes processed with eraser overlay applied', 'success');
+                } catch (e) {
+                    setStatus('draw', 'Error applying eraser overlay: ' + e.message, 'error');
+                    return;
+                }
+            }
 
             originalGeoJSON = geojson;
             processGeoJSONData(geojson);
@@ -644,6 +760,28 @@
         // Initialize on page load
         filenameInput.value = DEFAULT_OUTPUT_NAME;
         initializeDrawMap();
+
+        // Eraser overlay file input handler
+        document.getElementById('eraserOverlayInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                try {
+                    const geojson = JSON.parse(event.target.result);
+                    loadEraserOverlay(geojson);
+                } catch (e) {
+                    setStatus('draw', 'Error reading eraser overlay file: ' + e.message, 'error');
+                    clearEraserOverlay();
+                }
+            };
+            reader.onerror = function() {
+                setStatus('draw', 'Error reading eraser overlay file', 'error');
+                clearEraserOverlay();
+            };
+            reader.readAsText(file);
+        });
 
         // Close modal when clicking outside
         window.onclick = function(event) {
